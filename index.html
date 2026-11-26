@@ -294,7 +294,7 @@ ol.ruta .mono{font-size:12px}
       <div class="g12">
         <div class="card s5">
           <h3>Parámetros de solidificación</h3>
-          <p class="sub">G = (T<sub>máx</sub> − T<sub>S</sub>)/d · R = v·cos θ (θ = 0 en el eje)</p>
+          <p class="sub">G = (T<sub>máx</sub> − T<sub>S</sub>)/(d/2) · R = v·cos θ (θ = 0 en el eje)</p>
           <div id="grTabla" style="margin-top:8px"></div>
           <div class="frame" style="margin-top:10px"><canvas id="cvGR" style="height:260px"></canvas></div>
         </div>
@@ -798,7 +798,14 @@ const MODOS = ['Plano', 'Celular', 'Dendrítico columnar', 'Dendrítico equiaxia
 const MODOS_C = ['Plano', 'Celular', 'Dend. columnar', 'Dend. equiaxial'];
 function modoPorSoluto(s, u) { return s < u[0] ? 0 : s < u[1] ? 1 : s < u[2] ? 2 : 3; }
 // Modo con una tabla soluto + G/R (si el enunciado la da); null si ninguna fila aplica
-function modoTabla(T, s, gr) { return T.find(r => s >= r.s[0] && s <= r.s[1] && gr >= r.gr[0] && gr <= r.gr[1]) || null; }
+function modoTabla(T, s, gr) {
+  const fila = T.find(r => s >= r.s[0] && s <= r.s[1] && gr >= r.gr[0] && gr <= r.gr[1]);
+  if (fila) return fila;
+  // sin fila exacta: misma franja de G/R y el soluto más cercano
+  const dist = r => s < r.s[0] ? r.s[0] - s : s > r.s[1] ? s - r.s[1] : 0;
+  const cand = T.filter(r => gr >= r.gr[0] && gr <= r.gr[1]).sort((a, b) => dist(a) - dist(b));
+  return cand.length ? { ...cand[0], aprox: true } : null;
+}
 </script>
 <script>
 /* =====================================================================
@@ -922,9 +929,14 @@ function calcular() {
     o.alfa = Math.atan(1 / o.rho) * 180 / Math.PI;        // ángulo de la cola (°)
     o.forma = o.gGota >= 0.5 ? 'gota' : 'eliptico';      // solo para los textos
     // d: tamaño del charco ~ largo detrás del arco, L ≈ q / (2π k (T_S − T0)) (Rosenthal) · factor de concentración
-    o.dEst = p.conc * o.q / (2 * Math.PI * m.k * Math.max(o.tSolZF - p.T0, 50));
+    // d = diámetro del charco. El gradiente va del punto más caliente (centro) al límite de
+    // solidificación, así que la distancia es Δx = d/2 (corrección del profesor a la Ec. 6).
+    // Si no se da d: Rosenthal da la distancia arco → isoterma T_S, que ya es Δx.
+    const dxEst = p.conc * o.q / (2 * Math.PI * m.k * Math.max(o.tSolZF - p.T0, 50));
+    o.dEst = 2 * dxEst;
     o.d = (p.dMan && p.dMan > 0) ? p.dMan : o.dEst;
-    o.G = (p.Tmax - o.tSolZF) / o.d;      // °C/mm, Ec. 6: G = (T máx − T_S)/d
+    o.dx = o.d / 2;
+    o.G = (p.Tmax - o.tSolZF) / o.dx;     // °C/mm, G = (T máx − T_S)/(d/2)
     o.R = o.vs;                           // mm/s en la línea central
     o.GR = o.G / o.R; o.GxR = o.G * o.R;
     // cerca de la línea de fusión: R = v·cos θ (solo si el enunciado da θ)
@@ -2070,7 +2082,7 @@ function construirLateral() {
 }
 function construirPtab() {
   const acero = S.mat === 'FeC';   // H difusible, revestimiento y t8/5 solo tienen sentido en aceros
-  const filas = [['V', 'V (V)', 0.5], ['I', 'I (A)', 1], ['v', 'v (mm/min)', 5], ['eta', 'η', 0.05], ['T0', 'T₀ precal. (°C)', 5], ['dil', 'Dilución δ (%)', 1], ['Tmax', 'T máx charco (°C)', 50], ['conc', 'Concentración arco', 0.05], ['dMan', 'd manual (mm)', 0.1], ['thFL', 'θ en la LF (°)', 1]];
+  const filas = [['V', 'V (V)', 0.5], ['I', 'I (A)', 1], ['v', 'v (mm/min)', 5], ['eta', 'η', 0.05], ['T0', 'T₀ precal. (°C)', 5], ['dil', 'Dilución δ (%)', 1], ['Tmax', 'T máx charco (°C)', 50], ['conc', 'Concentración arco', 0.05], ['dMan', 'd charco, Ø (mm)', 0.1], ['thFL', 'θ en la LF (°)', 1]];
   const selProc = (p, i) => `<select data-i="${i}" data-k="proc" aria-label="Proceso de ${p.n}">${Object.keys(PROCESOS).map(k => `<option value="${k}"${k === p.proc ? ' selected' : ''}>${k}</option>`).join('')}</select>`;
   const selSub = (p, i) => { const sub = PROCESOS[p.proc].sub; if (!sub) return '<span class="mono" style="color:var(--muted);padding-left:6px">—</span>';
     return `<select data-i="${i}" data-k="sub" aria-label="Revestimiento o transferencia de ${p.n}">${Object.entries(sub).map(([k, [nom]]) => `<option value="${k}"${k === p.sub ? ' selected' : ''}>${nom}</option>`).join('')}</select>`; };
@@ -2243,7 +2255,7 @@ function panelZF(R) {
     <p class="sub">${S.conAporte ? '%X<sub>ZF</sub> = (1 − δ/100)·%X<sub>A</sub> + (δ/100)·%X<sub>B</sub> para cada elemento; el modo se decide con el soluto total' : 'Sin aporte la ZF tiene la composición del metal base'} · umbrales ${f(umbr[0], 1)} / ${f(umbr[1], 1)} / ${f(umbr[2], 1)} %</p></div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">${R.P.map(o => `${tagP(o)} <span class="tag gris">soluto ${f(o.sol, 2)} %</span> ${tagModo(o.modo)}${cerca(o.sol) ? ' <span class="tag aviso">cerca del umbral</span>' : ''}`).join('<span style="width:10px"></span>')}</div></div>
     ${S.conAporte ? `<p class="nota" style="margin-top:6px">${ap.nota}</p>` : ''}
-    ${R.P.some(o => o.mt !== undefined) ? `<p class="nota" style="margin-top:6px"><b>Tabla 3 del enunciado (soluto y G/R a la vez):</b> ${R.P.map(o => `${o.n}: centro ${o.mt ? o.mt.txt.toLowerCase() : 'fuera de la tabla (se usa el soluto)'}${o.Rfl ? ` · LF ${o.mtLF ? o.mtLF.txt.toLowerCase() : 'fuera de la tabla'}` : ''}`).join(' — ')}.</p>` : ''}`;
+    ${R.P.some(o => o.mt !== undefined) ? `<p class="nota" style="margin-top:6px"><b>Tabla 3 del enunciado (soluto y G/R a la vez):</b> ${R.P.map(o => `${o.n}: centro ${txtMt(o.mt, 'fuera de la tabla (se usa el soluto)', true)}${o.Rfl ? ` · LF ${txtMt(o.mtLF, 'fuera de la tabla', true)}` : ''}`).join(' — ')}.</p>` : ''}`;
   R.P.forEach(o => {
     $('zfHead' + (o.i + 1)).innerHTML = `<div><h3 style="color:${colP(o.i)}">${o.n} · ${o.p.proc} · charco ${nomForma(o)} · α ≈ ${f(o.alfa, 0)}°</h3>
       <p class="sub mono">${o.p.V} V · ${o.p.I} A · ${o.p.v} mm/min · V·I = ${f(o.VI, 0)} W · H = ${f(o.H, 1)} J/mm</p></div>${tagModo(o.modo)}`;
@@ -2252,7 +2264,8 @@ function panelZF(R) {
   });
   $('grTabla').innerHTML = `<table class="tabla mini"><thead><tr><th>Magnitud</th>${R.P.map(o => `<th>${o.n}</th>`).join('')}</tr></thead><tbody>
     <tr><td>T<sub>L</sub> / T<sub>S</sub> de la ZF (°C)</td>${R.P.map(o => `<td class="num">${f(o.tLiqZF, 0)} / ${f(o.tSolZF, 0)}</td>`).join('')}</tr>
-    <tr><td>d, tamaño del charco (mm)${R.P.some(o => o.p.dMan) ? '' : ' <span class="tag gris">est.</span>'}</td>${R.P.map(o => `<td class="num">${f(o.d, 2)}</td>`).join('')}</tr>
+    <tr><td>d, diámetro del charco (mm)${R.P.some(o => o.p.dMan) ? '' : ' <span class="tag gris">est.</span>'}</td>${R.P.map(o => `<td class="num">${f(o.d, 2)}</td>`).join('')}</tr>
+    <tr><td>Δx = d/2 (mm)</td>${R.P.map(o => `<td class="num">${f(o.dx, 2)}</td>`).join('')}</tr>
     <tr><td>G (°C/mm)</td>${R.P.map(o => `<td class="num">${f(o.G, 1)}</td>`).join('')}</tr>
     <tr><td>R = v (mm/s)</td>${R.P.map(o => `<td class="num">${f(o.R, 2)}</td>`).join('')}</tr>
     <tr><td>G/R (°C·s/mm²) → forma</td>${R.P.map(o => `<td class="num"><b>${f(o.GR, 1)}</b></td>`).join('')}</tr>
@@ -2260,7 +2273,7 @@ function panelZF(R) {
     ${R.P.some(o => o.Rfl) ? `<tr><td>R<sub>LF</sub> = v·cos θ (mm/s)</td>${R.P.map(o => `<td class="num">${o.Rfl ? f(o.Rfl, 3) + ` <span class="tag gris">θ ${o.p.thFL}°</span>` : '—'}</td>`).join('')}</tr>
     <tr><td>G/R en la LF</td>${R.P.map(o => `<td class="num"><b>${o.Rfl ? f(o.GRfl, 1) : '—'}</b></td>`).join('')}</tr>
     <tr><td>G·R en la LF (°C/s)</td>${R.P.map(o => `<td class="num"><b>${o.Rfl ? f(o.GxRfl, 0) : '—'}</b></td>`).join('')}</tr>` : ''}</tbody></table>
-    <p class="nota">G = (T<sub>máx</sub> − T<sub>S</sub>)/d (Ec. 6, T<sub>S</sub> de la ZF); el mismo G medio sirve para el centro y la LF. ${R.P.some(o => !o.p.dMan) ? 'd ≈ q / [2π·k·(T<sub>S</sub> − T₀)] (largo del charco, Rosenthal) × concentración del arco: es un supuesto; si el enunciado da el tamaño, escríbalo en «d manual».' : 'd es dato del enunciado.'}</p>`;
+    <p class="nota">G = (T<sub>máx</sub> − T<sub>S</sub>)/Δx (Ec. 6, T<sub>S</sub> de la ZF), con Δx = d/2: la distancia del punto más caliente (centro) al límite de solidificación es el radio, no el diámetro. El mismo G medio sirve para el centro y la LF. ${R.P.some(o => !o.p.dMan) ? 'Sin d dado: Δx ≈ q / [2π·k·(T<sub>S</sub> − T₀)] (Rosenthal, del arco a la isoterma T<sub>S</sub>) × concentración del arco, y d = 2Δx. Es un supuesto; si el enunciado da el tamaño, escríbalo en «d charco».' : 'd es dato del enunciado.'}</p>`;
   // tabla autógena vs aporte
   const fila = (t, fn) => `<tr><td>${t}</td>${R.P.map(o => fn(o, 'Auto') + fn(o, 'Ap')).join('')}</tr>`;
   $('zfTabla').innerHTML = `<thead><tr><th>Parámetro</th>${R.P.map(o => `<th>${o.n} autógena</th><th>${o.n} con aporte (δ ${o.p.dil} %)</th>`).join('')}</tr></thead><tbody>
@@ -2297,6 +2310,9 @@ function panelJunta(R) {
   }
   $('zonas').innerHTML = zf + R.zonas.map(z => tarjeta(z, R.P)).join('');
 }
+
+// modo leído en la tabla del enunciado; «aprox» = el soluto no cae en la fila de ese G/R
+const txtMt = (mt, nada, min) => mt ? (min ? mt.txt.toLowerCase() : mt.txt) + (mt.aprox ? ' (misma franja de G/R; el soluto no está en esa fila)' : '') : nada;
 
 /* ---------------- (e) riesgos ---------------- */
 function anchoZona(o, id) { return o.zonas.filter(z => z.id === id).reduce((s, z) => s + (Number.isFinite(z.x1) && Number.isFinite(z.x0) ? z.x1 - Math.max(z.x0, o.rZF) : 0), 0); }
@@ -2480,10 +2496,10 @@ function panelCalc(R) {
   B.push(`<div class="card paso"><h4>3. Regla de la palanca a T amb (${f(C, m.dec)} % ${m.el})</h4>${pal}
     ${mc ? `<p style="margin:6px 0 2px">Microconstituyentes (${mc.donde}):</p>${mc.filas.map(([n, fo, v]) => `<div class="eq">${n} = ${fo} = ${res(fp(v, 2))}</div>`).join('')}` : ''}</div>`);
   B.push(`<div class="card paso"><h4>4. Parámetros de solidificación${R.P.some(o => o.Rfl) ? ' (centro y línea de fusión)' : ' en la línea central'}</h4>${R.P.map(o => `
-    <div class="eq">${o.n}: d ${o.p.dMan ? '(dado)' : `≈ ${f(o.p.conc, 2)}·q / [2π·${f(m.k, 3)}·(${f(o.tSolZF, 0)} − ${o.p.T0})]`} = ${res(f(o.d, 2), 'mm')} · T<sub>S</sub> de la ZF (${f(o.cZF, 2)} % ${m.el}) ≈ ${f(o.tSolZF, 0)} °C</div>
-    <div class="eq">G = (T<sub>máx</sub> − T<sub>S</sub>)/d = (${o.p.Tmax} − ${f(o.tSolZF, 0)}) / ${f(o.d, 2)} = ${res(f(o.G, 1), '°C/mm')} · R<sub>centro</sub> = v·cos 0° = ${res(f(o.R, 2), 'mm/s')}</div>
-    <div class="eq">Centro: G/R = ${res(f(o.GR, 1), '°C·s/mm²')} · G·R = ${res(f(o.GxR, 0), '°C/s')}${o.mt !== undefined ? ` → ${res(o.mt ? o.mt.txt : 'fuera de la Tabla 3')}` : ''}</div>
-    ${o.Rfl ? `<div class="eq">LF: R = v·cos ${o.p.thFL}° = ${f(o.vs, 2)} × ${f(Math.cos(o.p.thFL * Math.PI / 180), 4)} = ${res(f(o.Rfl, 3), 'mm/s')} · G/R = ${res(f(o.GRfl, 1), '°C·s/mm²')} · G·R = ${res(f(o.GxRfl, 0), '°C/s')}${o.mt !== undefined ? ` → ${res(o.mtLF ? o.mtLF.txt : 'fuera de la Tabla 3')}` : ''}</div>` : ''}`).join('')}
+    <div class="eq">${o.n}: ${o.p.dMan ? `d = ${f(o.d, 2)} mm (dado) → Δx = d/2 = ${res(f(o.dx, 2), 'mm')}` : `Δx ≈ ${f(o.p.conc, 2)}·q / [2π·${f(m.k, 3)}·(${f(o.tSolZF, 0)} − ${o.p.T0})] = ${res(f(o.dx, 2), 'mm')} (d = 2Δx = ${f(o.d, 2)} mm)`} · T<sub>S</sub> de la ZF (${f(o.cZF, 2)} % ${m.el}) ≈ ${f(o.tSolZF, 0)} °C</div>
+    <div class="eq">G = (T<sub>máx</sub> − T<sub>S</sub>)/(d/2) = (${o.p.Tmax} − ${f(o.tSolZF, 0)}) / ${f(o.dx, 2)} = ${res(f(o.G, 1), '°C/mm')} · R<sub>centro</sub> = v·cos 0° = ${res(f(o.R, 2), 'mm/s')}</div>
+    <div class="eq">Centro: G/R = ${res(f(o.GR, 1), '°C·s/mm²')} · G·R = ${res(f(o.GxR, 0), '°C/s')}${o.mt !== undefined ? ` → ${res(txtMt(o.mt, 'fuera de la Tabla 3'))}` : ''}</div>
+    ${o.Rfl ? `<div class="eq">LF: R = v·cos ${o.p.thFL}° = ${f(o.vs, 2)} × ${f(Math.cos(o.p.thFL * Math.PI / 180), 4)} = ${res(f(o.Rfl, 3), 'mm/s')} · G/R = ${res(f(o.GRfl, 1), '°C·s/mm²')} · G·R = ${res(f(o.GxRfl, 0), '°C/s')}${o.mt !== undefined ? ` → ${res(txtMt(o.mtLF, 'fuera de la Tabla 3'))}` : ''}</div>` : ''}`).join('')}
     <p class="nota">(G/R)<sub>línea central</sub> ≪ (G/R)<sub>línea de fusión</sub> porque hacia el borde θ → 90° y R → 0.</p></div>`);
   const filasT = [...new Set(R.P.flatMap(o => o.zonas.map(z => z.tLo)))].sort((x, y) => y - x).filter(t => t > Math.min(...R.P.map(o => o.p.T0)));
   B.push(`<div class="card paso"><h4>5. Temperatura pico y anchos de zona (Rosenthal, placa gruesa)</h4>
